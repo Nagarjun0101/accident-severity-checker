@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Road Accident Severity Checker</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+<style>
+  body { font-family: Arial, sans-serif; background: #f4f6f8; color: #1f2933; margin: 0; }
+  header { background: #12355b; color: white; padding: 18px 24px; }
+  header h1 { margin: 0; font-size: 22px; }
+  header p { margin: 4px 0 0; font-size: 14px; opacity: 0.9; }
+  main { max-width: 1000px; margin: 0 auto; padding: 16px; }
+  .card { background: white; border-radius: 10px; padding: 18px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); margin-bottom: 18px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  h2 { margin-top: 0; font-size: 18px; }
+  label { display: block; font-size: 14px; margin: 10px 0 3px; }
+  select, input[type=number], input[type=text] { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #b8c1cc; border-radius: 6px; }
+  button { padding: 10px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 15px; margin: 14px 8px 0 0; }
+  .main-btn { background: #12355b; color: white; }
+  .light-btn { background: #e4e9ef; color: #1f2933; }
+  .info { background: #e8f1fb; border-left: 4px solid #12355b; padding: 10px 14px; font-size: 14px; border-radius: 4px; }
+  .badge { display: inline-block; padding: 8px 20px; border-radius: 20px; color: white; font-size: 20px; font-weight: bold; }
+  .Low { background: #2e7d32; } .Medium { background: #ed6c02; } .High { background: #c62828; }
+  .meter { position: relative; height: 14px; background: #e4e9ef; border-radius: 7px; margin: 14px 0 22px; }
+  .fill { height: 14px; border-radius: 7px; width: 0; }
+  .mark { position: absolute; top: -4px; width: 2px; height: 22px; background: #1f2933; }
+  .mark span { position: absolute; top: 24px; left: -20px; font-size: 11px; white-space: nowrap; }
+  .small { font-size: 13px; color: #52606d; }
+  .chart-box { position: relative; height: 260px; margin-bottom: 14px; }
+  .error { color: #c62828; font-size: 14px; }
+  details { margin: 12px 0; font-size: 14px; }
+
+  /* Print-only official memo formatting */
+  #audit-memo { display: none; }
+  @media print {
+    header, main { display: none !important; }
+    body { background: white; margin: 0; }
+    #audit-memo {
+      display: block !important;
+      font-family: "Courier New", Courier, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      padding: 20px;
+      color: black;
+    }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Road Accident Severity Checker</h1>
+  <p>Helps a road-safety analyst decide which conditions to investigate first</p>
+</header>
+
+<main>
+  <div class="info">
+    <b>How to read this:</b> pick the conditions. The tool shows how likely an accident under those
+    conditions is to be <b>severe</b> (Severity 3 or 4, meaning a bigger impact on traffic).
+    It supports <b>prioritising investigations</b>. It does not predict or prevent individual accidents.
+  </div>
+<div style="background: #eef4fa; padding: 12px; border-radius: 6px; margin-bottom: 16px;">
+    <label for="cityInput" style="font-weight: bold;">Auto-Fill from Live City Weather</label>
+    <div style="display: flex; gap: 8px; margin-top: 6px;">
+        <input type="text" id="cityInput" placeholder="e.g., Atlanta, Chicago, Miami" style="flex: 1;">
+        <button type="button" class="main-btn" onclick="autoFillWeather()" style="width: auto; margin-top: 0;">Fetch Live Weather</button>
+    </div>
+    <small id="weatherStatus" style="color: #1b365d; display: block; margin-top: 4px;"></small>
+</div>
+  <div class="grid" style="margin-top:18px;">
+    <div class="card">
+      <h2>1. Enter conditions</h2>
+      <form id="form">
+        <label for="weather">Weather</label>
+        <select id="weather"></select>
+
+        <label for="lighting">Lighting</label>
+        <select id="lighting"><option>Day</option><option>Night</option></select>
+
+        <label for="hour">Hour of day (0 to 23)</label>
+        <input id="hour" type="number" min="0" max="23" value="17">
+
+        <label for="weekday">Day of week</label>
+        <select id="weekday">
+          <option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option>
+          <option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option>
+          <option value="6">Sunday</option>
+        </select>
+
+        <label for="month">Month</label>
+        <select id="month">
+          <option value="1">January</option><option value="2">February</option><option value="3">March</option>
+          <option value="4">April</option><option value="5">May</option><option value="6">June</option>
+          <option value="7">July</option><option value="8">August</option><option value="9">September</option>
+          <option value="10">October</option><option value="11">November</option><option value="12">December</option>
+        </select>
+
+        <label for="visibility">Visibility (miles)</label>
+        <input id="visibility" type="number" min="0" max="100" step="0.1" value="10">
+
+        <label for="temperature">Temperature (F)</label>
+        <input id="temperature" type="number" min="-60" max="140" value="65">
+
+        <label for="wind_speed">Wind speed (mph)</label>
+        <input id="wind_speed" type="number" min="0" max="200" value="5">
+
+        <div class="checks" style="margin-top:12px;">
+          <label><input id="junction" type="checkbox"> Junction</label>
+          <label><input id="traffic_signal" type="checkbox"> Traffic signal</label>
+          <label><input id="crossing" type="checkbox"> Crossing</label>
+        </div>
+
+        <button class="main-btn" type="submit">Check risk</button>
+        <button class="light-btn" type="button" id="preset-calm">Example: calm day</button>
+        <button class="light-btn" type="button" id="preset-risky">Example: rainy night</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>2. Result</h2>
+      <p id="empty" class="small">Choose the conditions and press "Check risk".</p>
+      <div id="result" hidden>
+        <div id="badge" class="badge"></div>
+        <p id="score-text"></p>
+        <div class="meter">
+          <div id="fill" class="fill"></div>
+          <div id="mark-medium" class="mark"><span>Medium</span></div>
+          <div id="mark-high" class="mark"><span>High</span></div>
+        </div>
+        <p id="explain" class="small"></p>
+        <details>
+          <summary>Model details</summary>
+          <div id="class-scores"></div>
+          <p class="small">These scores come from a model trained with class weights, so rare severity levels (1 and 4)
+            get inflated scores. Use the risk level above and not the top class.</p>
+        </details>
+        <p id="note" class="small"></p>
+        <input type="text" id="caseId" placeholder="Case Ref (e.g., Corridor Audit #104)" style="margin-top:10px;">
+        <button type="button" class="main-btn" onclick="printReport()">Print / Save Report</button>
+      </div>
+      <p id="error" class="error"></p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3. Severity patterns (from the training sample)</h2>
+    <p class="small">Percent of accidents that were severe (Severity 3 or 4). These are simple averages of one factor at a time,
+      so they can differ from the checker above, which combines all inputs.</p>
+    <p id="chart-error" class="error"></p>
+    <div class="grid">
+      <div><h3>By hour of day</h3><div class="chart-box"><canvas id="hourChart"></canvas></div></div>
+      <div><h3>By weather</h3><div class="chart-box"><canvas id="weatherChart"></canvas></div></div>
+    </div>
+    <h3>Top 10 states</h3>
+    <div class="chart-box"><canvas id="stateChart"></canvas></div>
+    <p class="small">State differences can reflect how each state reports accidents, not only how dangerous its roads are.</p>
+  </div>
+</main>
+
+<!-- Official Audit Brief shown only when printing / saving as PDF -->
+<pre id="audit-memo"></pre>
+
+<script>
+// ---------- small helpers ----------
+function byId(id) { return document.getElementById(id); }
+let lastResult = null;
+let lastBody = null;
+
+async function getJSON(url) {
+  const response = await fetch(url);
+  if (!response.ok) { throw new Error(url + " returned status " + response.status); }
+  return response.json();
+}
+
+// ---------- example buttons ----------
+const PRESETS = {
+  calm:  { weather: "Clear", lighting: "Day", hour: 11, weekday: 2, month: 6, visibility: 10,
+           temperature: 70, wind_speed: 5, junction: false, traffic_signal: true, crossing: false },
+  risky: { weather: "Rain", lighting: "Night", hour: 22, weekday: 5, month: 11, visibility: 3,
+           temperature: 45, wind_speed: 15, junction: true, traffic_signal: false, crossing: false }
+};
+
+function applyPreset(name) {
+  const preset = PRESETS[name];
+  for (const key in preset) {
+    const field = byId(key);
+    if (field.type === "checkbox") { field.checked = preset[key]; }
+    else { field.value = preset[key]; }
+  }
+}
+
+// ---------- send the inputs to the API and show the answer ----------
+async function checkRisk(event) {
+  event.preventDefault();
+  byId("error").textContent = "";
+
+  const body = {
+    weather: byId("weather").value,
+    lighting: byId("lighting").value,
+    hour: Number(byId("hour").value),
+    weekday: Number(byId("weekday").value),
+    month: Number(byId("month").value),
+    visibility: Number(byId("visibility").value),
+    temperature: Number(byId("temperature").value),
+    wind_speed: Number(byId("wind_speed").value),
+    junction: byId("junction").checked,
+    traffic_signal: byId("traffic_signal").checked,
+    crossing: byId("crossing").checked
+  };
+
+  try {
+    const response = await fetch("/predict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) { throw new Error("Please check your inputs (server status " + response.status + ")."); }
+    const result = await response.json();
+    lastResult = result;
+    lastBody = body;
+    showResult(result);
+  } catch (error) {
+    byId("error").textContent = "Error: " + error.message;
+  }
+}
+
+function showResult(result) {
+  byId("empty").hidden = true;
+  byId("result").hidden = false;
+
+  const badge = byId("badge");
+  badge.textContent = result.risk_level + " risk";
+  badge.className = "badge " + result.risk_level;
+
+  byId("score-text").textContent = "Risk score: " + result.risk_score.toFixed(2) + " (relative, 0 to 1)";
+
+  const fill = byId("fill");
+  fill.style.width = (result.risk_score * 100) + "%";
+  fill.className = "fill " + result.risk_level;
+  byId("mark-medium").style.left = (result.cutoffs.medium * 100) + "%";
+  byId("mark-high").style.left = (result.cutoffs.high * 100) + "%";
+
+  byId("explain").textContent =
+    "Low is below " + result.cutoffs.medium.toFixed(2) + ", Medium is up to " + result.cutoffs.high.toFixed(2) +
+    ", High is above that. The cutoffs come from the model's scores on test accidents.";
+
+  const box = byId("class-scores");
+  box.textContent = "";
+  for (const severity in result.class_scores) {
+    const line = document.createElement("div");
+    line.textContent = "Severity " + severity + ": " + (result.class_scores[severity] * 100).toFixed(1) + "%";
+    box.appendChild(line);
+  }
+  byId("note").textContent = result.note;
+}
+
+// ---------- dashboard charts ----------
+function makeChart(canvasId, type, labels, values, color) {
+  new Chart(byId(canvasId), {
+    type: type,
+    data: { labels: labels, datasets: [{ data: values, backgroundColor: color, borderColor: color, tension: 0.3 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true, title: { display: true, text: "% severe" } } }
+    }
+  });
+}
+
+async function drawCharts() {
+  if (typeof Chart === "undefined") {
+    byId("chart-error").textContent = "The charts need an internet connection to load Chart.js.";
+    return;
+  }
+  const stats = await getJSON("/stats");
+
+  const hours = Object.keys(stats.by_hour).map(Number).sort(function (a, b) { return a - b; });
+  makeChart("hourChart", "line", hours.map(String), hours.map(function (h) { return stats.by_hour[String(h)]; }), "#12355b");
+
+  const weather = Object.entries(stats.by_weather).sort(function (a, b) { return b[1] - a[1]; });
+  makeChart("weatherChart", "bar", weather.map(function (x) { return x[0]; }), weather.map(function (x) { return x[1]; }), "#ed6c02");
+
+  const states = Object.entries(stats.by_state).sort(function (a, b) { return b[1] - a[1]; }).slice(0, 10);
+  makeChart("stateChart", "bar", states.map(function (x) { return x[0]; }), states.map(function (x) { return x[1]; }), "#2e7d32");
+}
+
+// ---------- start ----------
+async function init() {
+  try {
+    const options = await getJSON("/options");
+    options.weather.forEach(function (name) {
+      const option = document.createElement("option");
+      option.textContent = name;
+      byId("weather").appendChild(option);
+    });
+    await drawCharts();
+  } catch (error) {
+    byId("error").textContent = "Could not load data from the server: " + error.message;
+  }
+}
+
+byId("form").addEventListener("submit", checkRisk);
+byId("preset-calm").addEventListener("click", function () { applyPreset("calm"); });
+byId("preset-risky").addEventListener("click", function () { applyPreset("risky"); });
+init();
+
+async function autoFillWeather() {
+  const city = byId("cityInput").value.trim();
+  const status = byId("weatherStatus");
+  if (!city) {
+    status.textContent = "Please enter a city name.";
+    return;
+  }
+  status.textContent = "Fetching live meteorological feed...";
+
+  try {
+    const res = await fetch(`/live-weather?city=${encodeURIComponent(city)}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "City not found");
+    }
+    const data = await res.json();
+
+    byId("weather").value = data.weather;
+    byId("lighting").value = data.lighting;
+    byId("hour").value = data.hour;
+    byId("weekday").value = data.weekday;
+    byId("month").value = data.month;
+    byId("visibility").value = data.visibility;
+    byId("temperature").value = data.temperature;
+    byId("wind_speed").value = data.wind_speed;
+
+    status.textContent = `Loaded live data for ${data.resolved_location}. Click "Check risk" to evaluate.`;
+  } catch (err) {
+    status.textContent = `Error: ${err.message}`;
+  }
+}
+
+function printReport() {
+  if (!lastResult || !lastBody) return;
+
+  // 1. Get Case Reference ID and current date/time
+  const caseRef = byId("caseId").value.trim() || "Corridor Audit #104";
+  const now = new Date().toLocaleString();
+
+  // 2. Convert weekday and month numbers into readable names
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const dayName = days[lastBody.weekday];
+  const monthName = months[lastBody.month];
+
+  // 3. Pick the recommended action based on risk level
+  let action = "Routine corridor monitoring — standard roadway conditions observed.";
+  if (lastResult.risk_level === "High") {
+    action = "Immediate field audit recommended — inspect junction sightlines, night illumination, and signal timing.";
+  } else if (lastResult.risk_level === "Medium") {
+    action = "Scheduled corridor review recommended — verify signage, drainage, and approach speeds.";
+  }
+
+  // 4. Convert class probabilities (0 to 1) into percentages
+  const p1 = (lastResult.class_scores["1"] * 100).toFixed(1);
+  const p2 = (lastResult.class_scores["2"] * 100).toFixed(1);
+  const p3 = (lastResult.class_scores["3"] * 100).toFixed(1);
+  const p4 = (lastResult.class_scores["4"] * 100).toFixed(1);
+  const severeSum = ((lastResult.class_scores["3"] + lastResult.class_scores["4"]) * 100).toFixed(1);
+
+  // 5. Build the inspection checklist based on active risk conditions
+  let checklist = "";
+  if (lastBody.lighting === "Night" || lastBody.visibility < 3) {
+    checklist += "   [x] Night-time visibility & street lighting adequacy check\n";
+  }
+  if (lastBody.junction && !lastBody.traffic_signal) {
+    checklist += "   [x] Unsignalized junction approach speed & warning signage check\n";
+  }
+  if (lastBody.weather === "Rain" || lastBody.weather === "Snow" || lastBody.weather === "Fog") {
+    checklist += "   [x] Wet-pavement drainage & skid-resistance inspection\n";
+  }
+  if (lastBody.crossing) {
+    checklist += "   [x] Pedestrian / rail crossing warning signage & marking check\n";
+  }
+  if (checklist === "") {
+    checklist = "   [x] Routine roadway signage & traffic-flow verification\n";
+  }
+
+  // 6. Format Yes/No text for road features
+  const hasJunction = lastBody.junction ? "Yes" : "No";
+  const hasSignal = lastBody.traffic_signal ? "Yes" : "No";
+  const hasCrossing = lastBody.crossing ? "Yes" : "No";
+
+  // 7. Fill the hidden <pre id="audit-memo"> block and open the browser Print/PDF dialog
+  byId("audit-memo").textContent =
+`================================================================================
+ROAD-SAFETY INVESTIGATION & CORRIDOR AUDIT BRIEF
+Generated: ${now}  |  Case Ref: ${caseRef}
+Model: ${lastResult.model_name || "Tuned & Balanced Random Forest"} (US Accidents Risk Analysis)
+================================================================================
+
+1. INVESTIGATION PRIORITY SUMMARY
+   • Priority Level:      ${lastResult.risk_level.toUpperCase()} RISK (Score: ${lastResult.risk_score.toFixed(2)}  |  Cutoffs: Med ${lastResult.cutoffs.medium.toFixed(2)}, High > ${lastResult.cutoffs.high.toFixed(2)})
+   • Recommended Action:  ${action}
+
+2. ASSESSED ENVIRONMENTAL & ROADWAY CONDITIONS
+   • Weather: ${lastBody.weather}  |  Visibility: ${lastBody.visibility} mi  |  Wind Speed: ${lastBody.wind_speed} mph
+   • Temperature: ${lastBody.temperature} °F  |  Lighting: ${lastBody.lighting}  |  Time: ${lastBody.hour}:00 (${dayName}, ${monthName})
+   • Infrastructure: Junction: ${hasJunction} | Traffic Signal: ${hasSignal} | Crossing: ${hasCrossing}
+
+3. SEVERITY PROBABILITY BREAKDOWN (BALANCED MODEL OUTPUT)
+   • Severity 1 (Minimal traffic impact):   ${p1}%
+   • Severity 2 (Moderate traffic impact):  ${p2}%
+   • Severity 3 (Significant delay):        ${p3}%  <-- Severe Class
+   • Severity 4 (Major/severe impact):      ${p4}%  <-- Severe Class
+   • Combined Severe Probability (3 + 4):   ${severeSum}%
+
+4. KEY RISK DRIVERS & FIELD INSPECTION CHECKLIST
+${checklist}
+--------------------------------------------------------------------------------
+METHODOLOGICAL NOTE: Severity reflects traffic impact/delay, not medical injury.
+This brief prioritizes road-safety field investigations and does not claim
+direct accident prevention.
+================================================================================`;
+
+  window.print();
+}
+</script>
+</body>
+</html>
