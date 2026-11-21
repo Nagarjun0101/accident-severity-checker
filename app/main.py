@@ -1,7 +1,7 @@
 """
 FastAPI Backend (Step 11)
 Connects the web dashboard (index.html) to the saved ML model (predictor.py)
-and fetches live weather data via Open-Meteo.
+and fetches live weather data via Open-Meteo with automatic fallbacks.
 """
 
 from datetime import datetime
@@ -94,45 +94,117 @@ def predict_risk(req: PredictRequest):
 # 6. Live City Weather Auto-Fill Endpoint
 @app.get("/live-weather")
 async def get_live_weather(city: str):
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        # Step A: Convert city name into latitude & longitude
-        geo_res = await client.get(
-            "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": city, "count": 1, "format": "json"},
-        )
-        results = geo_res.json().get("results")
-        if not results:
-            raise HTTPException(status_code=404, detail=f"City '{city}' not found")
+    clean_city = city.split(",")[0].strip()
+    if not clean_city:
+        raise HTTPException(status_code=400, detail="Please enter a city name")
 
-        place = results[0]
+    headers = {"User-Agent": "RoadAccidentSeverityChecker/1.0 (student-ml-project)"}
 
-        # Step B: Fetch current temperature (°F), wind (mph), visibility, and day/night
-        weather_res = await client.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={
-                "latitude": place["latitude"],
-                "longitude": place["longitude"],
-                "current": "temperature_2m,wind_speed_10m,visibility,weather_code,is_day",
-                "temperature_unit": "fahrenheit",
-                "wind_speed_unit": "mph",
-                "timezone": "auto",
-            },
-        )
-        curr = weather_res.json()["current"]
-        local_time = datetime.fromisoformat(curr["time"])
+    async with httpx.AsyncClient(timeout=15.0, headers=headers, follow_redirects=True) as client:
+        # Step A: Geocode city -> latitude & longitude (Open-Meteo with OpenStreetMap fallback)
+        lat = lon = None
+        resolved_loc = clean_city
 
-        # Convert visibility from meters to miles (capped at 10 mi like training data)
-        raw_vis = curr.get("visibility")
-        vis_miles = min(round((raw_vis if raw_vis is not None else 16093) / 1609.34, 1), 10.0)
+        try:
+            geo_res = await client.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={"name": clean_city, "count": 1, "language": "en", "format": "json"},
+            )
+            if geo_res.status_code == 200:
+                results = geo_res.json().get("results")
+                if results:
+                    place = results[0]
+                    lat, lon = place["latitude"], place["longitude"]
+                    resolved_loc = f"{place['name']}, {place.get('admin1', '')} ({place.get('country_code', '')})"
+        except Exception:
+            pass
 
-        return {
-            "resolved_location": f"{place['name']}, {place.get('admin1', '')} ({place.get('country_code', '')})",
-            "weather": map_weather_code(curr["weather_code"]),
-            "temperature": round(curr["temperature_2m"], 1),
-            "wind_speed": round(curr["wind_speed_10m"], 1),
-            "visibility": vis_miles,
-            "hour": local_time.hour,
-            "weekday": local_time.weekday(),
-            "month": local_time.month,
-            "lighting": "Day" if curr["is_day"] == 1 else "Night",
-        }
+        if lat is None:
+            try:
+                osm_res = await client.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={"q": clean_city, "format": "json", "limit": 1, "addressdetails": 1},
+                )
+                if osm_res.status_code == 200 and osm_res.json():
+                    osm_place = osm_res.json()[0]
+                    lat, lon = float(osm_place["lat"]), float(osm_place["lon"])
+                    addr = osm_place.get("address", {})
+                    name = addr.get("city") or addr.get("town") or addr.get("state") or clean_city
+                    state = addr.get("state", "")
+                    cc = addr.get("country_code", "").upper()
+                    resolved_loc = f"{name}, {state} ({cc})"
+            except Exception:
+                pass
+
+        if lat is None or lon is None:
+            raise HTTPException(status_code=404, detail=f"City '{clean_city}' not found")
+
+        # Step B: Fetch current weather (Open-Meteo with wttr.in fallback if Render IP is rate-limited)
+        try:
+            weather_res = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": lat,
+                    "longitude": lon,
+                    "current": "temperature_2m,wind_speed_10m,visibility,weather_code,is_day",
+                    "temperature_unit": "fahrenheit",
+                    "wind_speed_unit": "mph",
+                    "timezone": "auto",
+                },
+            )
+            w_data = weather_res.json()
+            if weather_res.status_code == 200 and "current" in w_data:
+                curr = w_data["current"]
+                local_time = datetime.fromisoformat(curr["time"])
+                raw_vis = curr.get("visibility")
+                vis_miles = min(round((raw_vis if raw_vis is not None else 16093) / 1609.34, 1), 10.0)
+
+                return {
+                    "resolved_location": resolved_loc,
+                    "weather": map_weather_code(curr["weather_code"]),
+                    "temperature": round(curr["temperature_2m"], 1),
+                    "wind_speed": round(curr["wind_speed_10m"], 1),
+                    "visibility": vis_miles,
+                    "hour": local_time.hour,
+                    "weekday": local_time.weekday(),
+                    "month": local_time.month,
+                    "lighting": "Day" if curr["is_day"] == 1 else "Night",
+                }
+        except Exception:
+            pass
+
+        # Fallback weather source (wttr.in) if Open-Meteo rate-limits Render's shared IP
+        try:
+            wttr_res = await client.get(f"https://wttr.in/{lat},{lon}", params={"format": "j1"})
+            if wttr_res.status_code == 200:
+                cond = wttr_res.json()["current_condition"][0]
+                now = datetime.now()
+                desc = cond["weatherDesc"][0]["value"].lower()
+                if "snow" in desc or "ice" in desc or "sleet" in desc:
+                    w_group = "Snow"
+                elif "rain" in desc or "drizzle" in desc or "shower" in desc or "thunder" in desc:
+                    w_group = "Rain"
+                elif "fog" in desc or "mist" in desc or "haze" in desc:
+                    w_group = "Fog"
+                elif "cloud" in desc or "overcast" in desc:
+                    w_group = "Cloudy"
+                elif "clear" in desc or "sunny" in desc:
+                    w_group = "Clear"
+                else:
+                    w_group = "Other"
+
+                return {
+                    "resolved_location": resolved_loc,
+                    "weather": w_group,
+                    "temperature": round(float(cond["temp_F"]), 1),
+                    "wind_speed": round(float(cond["windspeedMiles"]), 1),
+                    "visibility": min(round(float(cond["visibilityMiles"]), 1), 10.0),
+                    "hour": now.hour,
+                    "weekday": now.weekday(),
+                    "month": now.month,
+                    "lighting": "Day" if 6 <= now.hour < 18 else "Night",
+                }
+        except Exception as err:
+            raise HTTPException(status_code=502, detail=f"Weather provider unavailable: {err}")
+
+    raise HTTPException(status_code=502, detail="Unable to fetch live weather right now")
